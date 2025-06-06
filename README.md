@@ -107,6 +107,6 @@ This bot is actively being improved. If you have feedback, questions, or want to
 
 ---
 
-## 🌐 Live Site
+## 🌐 Live Site [🚧UNDER CONSTRUCTION🚧]
 
 Visit: [My GitHub Pages Portfolio](https://your-username.github.io/alpaca-trading-bot/)
