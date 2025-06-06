@@ -105,8 +105,3 @@ Focus on risk management and real-world trade mechanics
 ## 📬 Contact & Feedback
 This bot is actively being improved. If you have feedback, questions, or want to collaborate, feel free to open an issue or connect with me.
 
----
-
-## 🌐 Live Site [🚧UNDER CONSTRUCTION🚧]
-
-Visit: [My GitHub Pages Portfolio](https://your-username.github.io/alpaca-trading-bot/)
