@@ -20,7 +20,8 @@ API_DELAY = 1
 def get_account(trading_client, max_retries=3, delay=5):
     for attempt in range(1, max_retries+1):
         try:
-            account=trading_client.get_account()
+            account_obj = trading_client.get_account()
+            account = account_obj.model_dump()
             return account
         except Exception as e:
             if attempt < max_retries:
@@ -86,17 +87,19 @@ def trade_status(symbol:str, trading_client):
     today = datetime.now(timezone.utc).date()
 
     try:
-        request = GetOrdersRequest(status=QueryOrderStatus.ALL)
-        recent_orders = trading_client.get_orders(request)
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        open_orders = trading_client.get_orders(request)
 
-        for order in recent_orders:
-            if order.symbol != symbol:
-                continue
-
-            if order.status == "open":
+        for order in open_orders:
+            if order.symbol == symbol:
                 return "open_order"
 
+        request = GetOrdersRequest(status=QueryOrderStatus.CLOSED)
+        closed_orders = trading_client.get_orders(request)
+
+        for order in closed_orders:
             if (
+                order.symbol == symbol and
                 order.side == "buy" and
                 order.submitted_at.date() == today
             ):
@@ -117,7 +120,7 @@ def set_support_resistance(close_prices: pd.Series, window:int=5) -> Optional[Di
         low_range = close_prices[i - window:i + 1]
         high_range = close_prices[i:i + window + 1]
 
-        current_price = close_prices[i]
+        current_price = close_prices.iloc[i]
         if current_price == low_range.min() and current_price not in support_levels:
             support_levels.append(round(current_price, 2))
         if current_price == high_range.max() and current_price not in resistance_levels:
@@ -129,20 +132,27 @@ def set_support_resistance(close_prices: pd.Series, window:int=5) -> Optional[Di
     }
 
 def get_symbol_data(symbol:str, data_client, timeframe: TimeFrame = TimeFrame(1, TimeFrameUnit.Day), lookback_days: int=30) -> Optional[dict]:
-    end = pd.Timestamp.now(tz='UTC')
+    end = pd.Timestamp.now(tz='UTC') - pd.Timedelta(minutes=20)
     start = end - pd.Timedelta(days=lookback_days)
+    i=0
+    max=3
     
-    try:
-        get_params = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=timeframe,
-            start=start,
-            end=end
-        )
-        bars_df = data_client.get_stock_bars(get_params).df
-        time.sleep(API_DELAY)
-    except Exception as e:
-        print(f"Failed to get historical data for {symbol}: {e}")
+    while i < max:
+        try:
+            get_params = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=timeframe,
+                start=start,
+                end=end
+            )
+            bars_df = data_client.get_stock_bars(get_params).df
+            time.sleep(API_DELAY)
+            break
+        except Exception as e:
+            i+=1
+            print(f"Trying to get historical data for {symbol}: {e}.")
+            time.sleep(API_DELAY)
+    else:
         return None
 
     if bars_df.empty or symbol not in bars_df.index.get_level_values(0):
@@ -243,7 +253,7 @@ def set_limit_order(symbol:str,data:dict, qty_held:float, account) -> Optional[d
 
     return None
 
-def set_stop_order(symbol: str, data: dict, qty_held: float) -> Optional[dict]:
+def set_stop_order(symbol: str, data: dict, qty_held: float, account: dict) -> Optional[dict]:
     if qty_held <= 0:
         return None
 
@@ -276,7 +286,7 @@ def set_stop_order(symbol: str, data: dict, qty_held: float) -> Optional[dict]:
         'time_in_force': "gtc"
     }
 
-def set_trailing_stop_order(symbol:str, data:dict, qty_held:float, unrealized_plpc:float) -> Optional[dict]:
+def set_trailing_stop_order(symbol:str, data:dict, qty_held:float, account: dict, unrealized_plpc:float) -> Optional[dict]:
     price = data["latest_close"]
     atr = data.get("atr")    
     rsi = data.get("rsi")
@@ -350,7 +360,7 @@ def submit_order(trade:dict, trading_client) -> Optional[dict]:
         "trailing_stop": TrailingStopOrderRequest,
     }
 
-    order_type = trade["order_type"]
+    order_type = trade["type"]
     order_class = ORDER_TYPE_TO_CLASS.get(order_type)
 
     if not order_class:
@@ -365,7 +375,7 @@ def submit_order(trade:dict, trading_client) -> Optional[dict]:
             time_in_force=TimeInForce(trade["time_in_force"]),
             **{k: trade[k] for k in ["limit_price", "stop_price", "trail_percent"] if k in trade}
         )
-
+        print(f"Placing {trade['type']} order for {trade['qty']} shares of {trade['symbol']}")
         order = trading_client.submit_order(order_request)
         time.sleep(API_DELAY)
 
@@ -388,7 +398,7 @@ def main():
     logbook = { 'receipts':[]  }
     trading_client = TradingClient(API_KEY,API_SECRET,paper=True)
     data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
-    account = trading_client.get_account() 
+    account = get_account(trading_client) 
     daytrade_count = getattr(account, "daytrade_count", 0)
     check_daytrades(daytrade_count)
     full_watchlist = get_full_watchlist(trading_client)
@@ -414,6 +424,8 @@ def main():
             time.sleep(API_DELAY)
             status = trade_status(symbol, trading_client)
             if status in ("open_order", "error"):
+                full_watchlist.pop(symbol)
+                time.sleep(API_DELAY)
                 continue
             if status == "bought_today":
                 full_watchlist.pop(symbol)
@@ -422,21 +434,27 @@ def main():
 
             data = get_symbol_data(symbol, data_client)
             if not data:
+                print(f"Failed to get historical data for {symbol}. Removing from list.")
+                full_watchlist.pop(symbol)
                 continue
             
             trade = None
             for strategy in strategies:
-                trade = strategy(symbol, data, qty_held, unrealized_plpc, account)
+                if strategy in [set_limit_order, set_stop_order]:
+                    trade = strategy(symbol, data, qty_held, account)
+                else:  # trailing stop and market order need the 5th param
+                    trade = strategy(symbol, data, qty_held, account, unrealized_plpc)
                 if trade:
                     break
 
             #FUNCTION CALL FOR PUSH NOTIFICATION CONFIRMATION HERE. ADD TRY/EXCEPT BLOCK TO SAID FUNCTION.
             if not trade:
+                print(f"No trades found yet...")
+                time.sleep(API_DELAY)
                 continue
             submit = submit_order(trade, trading_client)
             if submit:
-                if trade["side"] == "buy":
-                    full_watchlist.pop(symbol)
+                full_watchlist.pop(symbol)
                 logbook['receipts'].append(submit)
                 account = get_account(trading_client)
     print(f"No more trades for today. Logging trades and ending run.")
