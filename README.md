@@ -14,7 +14,7 @@ This bot evaluates technical indicators in real-time and places smart buy/sell o
 
 ## 🛠️ Features
 
-- 📈 Gathers **historical and real-time** stock data using Alpaca's API  
+- 📈 Gathers **historical and real-time** stock data using Alpaca's API, barring IEX limitations.  
 - 🤖 Places **market, limit, stop-loss, and trailing stop** orders  
 - 🧮 Evaluates trades using **EMA, RSI, ATR** indicators  
 - 🧠 Avoids day-trading flags, double-buys, and position conflicts  
