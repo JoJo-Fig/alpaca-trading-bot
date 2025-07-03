@@ -1,6 +1,9 @@
 import sys
 import time
 import json
+from datetime import datetime
+from uuid import UUID
+from decimal import Decimal
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, StopOrderRequest, TrailingStopOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
@@ -394,6 +397,15 @@ def submit_order(trade:dict, trading_client) -> Optional[dict]:
     }
     return receipt
 
+def custom_serializer(obj):
+    if isinstance(obj, (datetime, UUID)):
+        return str(obj)
+    elif isinstance(obj, Decimal):
+        return float(obj)
+    elif isinstance(obj, set):
+        return list(obj)
+    raise TypeError(f"Type {type(obj)} not serializable")
+
 def main():
     logbook = { 'receipts':[]  }
     trading_client = TradingClient(API_KEY,API_SECRET,paper=True)
@@ -459,6 +471,6 @@ def main():
                 account = get_account(trading_client)
     print(f"No more trades for today. Logging trades and ending run.")
     with open("trade_receipts.json", "w") as f:
-        json.dump(logbook['receipts'], f, indent=4)
+        json.dump(logbook['receipts'], f, indent=4, default=custom_serializer)
 if __name__ == "__main__":
     main()
